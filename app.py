@@ -227,7 +227,7 @@ elif page == "Interactive Priority Map":
         filtered_df = filtered_df.sample(n=max_display, random_state=42)
         
     # Initialize Folium Map centered on Bangkok
-    m = folium.Map(location=[13.7563, 100.5018], zoom_start=11, tiles="cartodbpositron")
+    m = folium.Map(location=[13.7563, 100.5018], zoom_start=11, tiles="OpenStreetMap")
     
     # Priority Color Mapping
     color_map = {
