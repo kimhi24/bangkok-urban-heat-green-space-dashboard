@@ -2,10 +2,10 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import json
+import math
 import plotly.express as px
 import plotly.graph_objects as go
 import folium
-from folium.plugins import HeatMap
 from streamlit_folium import st_folium
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
@@ -37,6 +37,26 @@ st.markdown("""
     .metric-title { font-size: 0.9rem; color: #a3b18a; margin-bottom: 5px; }
     .metric-value { font-size: 1.8rem; font-weight: bold; color: #ffffff; }
     .stAlert { background-color: #1c2541; border: 1px solid #3a506b; color: #e0e1dd; }
+    .species-card {
+        background-color: #1c2541;
+        border: 1px solid #3a506b;
+        border-radius: 10px;
+        padding: 18px;
+        margin-bottom: 20px;
+    }
+    .species-title { color: #52b788; font-size: 1.3rem; font-weight: bold; }
+    .species-scientific { color: #a3b18a; font-style: italic; font-size: 1.0rem; margin-bottom: 10px; }
+    .badge {
+        background-color: #2d6a4f;
+        color: #ffffff;
+        padding: 4px 10px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        display: inline-block;
+        margin-right: 5px;
+        margin-bottom: 5px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,9 +85,6 @@ def load_and_preprocess_data():
     grid_df = grid_df[(grid_df['NDVI'] >= -0.2) & (grid_df['NDVI'] <= 1.0)]
     grid_df = grid_df[grid_df['population'] >= 0]
     
-    # ------------------------------------------
-    # Priority Scoring Methodology (Stage 4)
-    # ------------------------------------------
     # Normalize factors between 0 and 1
     lst_min, lst_max = grid_df['LST'].min(), grid_df['LST'].max()
     ndvi_min, ndvi_max = grid_df['NDVI'].min(), grid_df['NDVI'].max()
@@ -77,14 +94,14 @@ def load_and_preprocess_data():
     grid_df['NDVI_norm'] = (ndvi_max - grid_df['NDVI']) / (ndvi_max - ndvi_min + 1e-6) # Inverse: low vegetation = higher priority
     grid_df['Pop_norm'] = (grid_df['population'] - pop_min) / (pop_max - pop_min + 1e-6)
     
-    # Transparent Weighted Scoring (LST: 40%, NDVI: 35%, Population Exposure: 25%)
+    # Priority Scoring (LST: 40%, NDVI: 35%, Population Exposure: 25%)
     grid_df['Priority_Score'] = (
         0.40 * grid_df['LST_norm'] +
         0.35 * grid_df['NDVI_norm'] +
         0.25 * grid_df['Pop_norm']
     ) * 100.0
     
-    # Categorize into Priority Levels
+    # Priority Categories
     quantiles = grid_df['Priority_Score'].quantile([0.25, 0.50, 0.75]).values
     def get_category(score):
         if score >= quantiles[2]: return 'Very High'
@@ -109,7 +126,6 @@ def train_random_forest_model(grid_df):
     X = grid_df[features]
     y = grid_df['LST']
     
-    # 80/20 Train-Test Split with reproducible seed
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42)
     
     model = RandomForestRegressor(n_estimators=100, max_depth=12, random_state=42, n_jobs=-1)
@@ -137,20 +153,85 @@ except Exception as e:
     st.error(f"Error loading project datasets: {e}")
     st.stop()
 
+# Static Tree Species Data (5 Candidate Species)
+SPECIES_DATA = [
+    {
+        "thai_name": "มะค่าโมง",
+        "scientific_name": "Afzelia xylocarpa",
+        "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Afzelia_xylocarpa_leaves.jpg/640px-Afzelia_xylocarpa_leaves.jpg",
+        "description": "Large native deciduous forest tree with a broad, dense rounded crown. Exceptional timber strength and broad canopy coverage.",
+        "canopy_size": "Large (12 - 18 m crown diameter, ~110 - 250 m² canopy)",
+        "environments": ["Park", "Open Public Space"],
+        "benefits": "Dense shade canopy, high carbon storage capacity, atmospheric nitrogen fixation through root nodules.",
+        "limitations": "Massive trunk buttresses and root expansion. Unsuitable for narrow sidewalks, road dividers, or near built infrastructure.",
+        "source": "Bangkok Metropolitan Administration (BMA) & Royal Forest Department (RFD)"
+    },
+    {
+        "thai_name": "ยางนา",
+        "scientific_name": "Dipterocarpus alatus",
+        "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Dipterocarpus_alatus_in_Thailand.jpg/640px-Dipterocarpus_alatus_in_Thailand.jpg",
+        "description": "Iconic large emergent native tree of the Chao Phraya river basin. Tall straight trunk with broad spreading upper canopy branches.",
+        "canopy_size": "Very Large (15 - 25 m crown diameter, ~150 - 350 m² canopy)",
+        "environments": ["Park", "Open Public Space"],
+        "benefits": "Superior airborne PM2.5 particulate interception, high windbreak potential, major carbon sequestration reservoir.",
+        "limitations": "Extreme mature height (up to 40m). Branch drop hazard during monsoon storms if unpruned. Requires wide soil footprint.",
+        "source": "BMA Parks & Gardening Division / Kasetsart University Forestry Research"
+    },
+    {
+        "thai_name": "ประดู่บ้าน",
+        "scientific_name": "Pterocarpus indicus",
+        "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c2/Pterocarpus_indicus_tree.jpg/640px-Pterocarpus_indicus_tree.jpg",
+        "description": "Widely planted urban shade tree across Bangkok. Features umbrella-like spreading branches with vibrant golden seasonal yellow flowers.",
+        "canopy_size": "Medium to Large (10 - 15 m crown diameter, ~80 - 180 m² canopy)",
+        "environments": ["Roadside", "Park", "Open Public Space"],
+        "benefits": "Excellent microclimate cooling efficiency, dense leaf canopy for solar radiation reduction, high tolerance to heat.",
+        "limitations": "Shallow aggressive lateral roots can lift light sidewalk pavement if planted in restricted soil pits.",
+        "source": "Bangkok Urban Greening Master Plan & Royal Forest Department"
+    },
+    {
+        "thai_name": "ชมพูพันธุ์ทิพย์",
+        "scientific_name": "Tabebuia rosea",
+        "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1d/Tabebuia_rosea_flowers.jpg/640px-Tabebuia_rosea_flowers.jpg",
+        "description": "Popular ornamental medium-to-large shade tree known for striking pink floral blooms. Broad dome-shaped canopy.",
+        "canopy_size": "Medium (8 - 14 m crown diameter, ~50 - 150 m² canopy)",
+        "environments": ["Park", "Open Public Space", "Residential Area"],
+        "benefits": "Rapid juvenile growth rate, high visual aesthetic value, effective neighborhood canopy shading.",
+        "limitations": "Heavy seasonal leaf and flower litter. Softwood branches prone to wind snapping during severe squalls.",
+        "source": "BMA Environment Department & Faculty of Forestry, Kasetsart University"
+    },
+    {
+        "thai_name": "อินทนิล",
+        "scientific_name": "Lagerstroemia speciosa",
+        "image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Lagerstroemia_speciosa_flowers.jpg/640px-Lagerstroemia_speciosa_flowers.jpg",
+        "description": "Medium-sized deciduous flowering shade tree with purple and pink blossoms. Highly adaptable to harsh urban streetscapes.",
+        "canopy_size": "Medium (6 - 10 m crown diameter, ~30 - 80 m² canopy)",
+        "environments": ["Roadside", "Narrow Planting Space", "Residential Area", "Park"],
+        "benefits": "Non-invasive deep root system, high heat and drought tolerance, excellent fit for roadside medians and streetscapes.",
+        "limitations": "Slower growth rate in severely compacted urban soils. Susceptible to powdery mildew in heavily shaded environments.",
+        "source": "Bangkok Tree Planting 1-Million Trees Campaign / RFD Guidelines"
+    }
+]
+
 # ==========================================
-# 3. Sidebar Navigation & Global Filters
+# 3. Sidebar Navigation
 # ==========================================
 st.sidebar.title("🌳 Navigation")
 page = st.sidebar.radio(
     "Select Page:",
-    ["Homepage & Executive Overview", "Interactive Priority Map", "District Comparison", "Model Performance & Machine Learning"]
+    [
+        "Homepage & Executive Overview", 
+        "Interactive Priority Map", 
+        "District Comparison", 
+        "Model Performance & Machine Learning",
+        "Tree Planting Estimation & Species Guide" # NEW PAGE
+    ]
 )
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📌 Project Details")
 st.sidebar.info("""
 **Bangkok Urban Heat & Green Space Priority Dashboard**
-- **Spatial Resolution:** 250m × 250m Grid
+- **Spatial Resolution:** 250m × 250m Grid (~25,000 cells)
 - **Satellite Data:** Landsat 8/9 (2020–2025)
 - **Target Users:** Urban Planners & BMA Policy Researchers
 """)
@@ -226,10 +307,8 @@ elif page == "Interactive Priority Map":
     if len(filtered_df) > max_display:
         filtered_df = filtered_df.sample(n=max_display, random_state=42)
         
-    # Initialize Folium Map centered on Bangkok
     m = folium.Map(location=[13.7563, 100.5018], zoom_start=11, tiles="OpenStreetMap")
     
-    # Priority Color Mapping
     color_map = {
         'Very High': 'red',
         'High': 'orange',
@@ -237,7 +316,6 @@ elif page == "Interactive Priority Map":
         'Low': 'green'
     }
     
-    # Add Grid Points
     for idx, row in filtered_df.iterrows():
         popup_text = f"""
         <b>Priority Level:</b> {row['Priority_Category']}<br>
@@ -312,4 +390,231 @@ elif page == "Model Performance & Machine Learning":
     st.info("""
     - **Random Split Leakage:** Standard 80/20 train-test splits on spatial datasets can overestimate model performance due to spatial autocorrelation between adjacent 250m grid cells.
     - **Surface vs Air Temperature:** Satellite thermal sensors measure skin/surface temperature (LST), which fluctuates more dramatically than ambient air temperature.
+    """)
+
+# ==========================================
+# PAGE 5: Tree Planting Estimation & Species Guide (NEW FEATURE)
+# ==========================================
+elif page == "Tree Planting Estimation & Species Guide":
+    st.title("🌱 Tree Planting Estimation & Species Guide")
+    st.markdown("##### *Decision-Support Planning Tool for Target Greening Requirements & Candidate Tree Selection*")
+    st.markdown("---")
+    
+    st.markdown("""
+    This feature builds directly upon the **Heat Priority Map**. By selecting specific priority tiers or administrative districts, 
+    urban planners can estimate tree canopy expansion requirements under transparent, scenario-based assumptions.
+    """)
+    
+    # ------------------------------------------
+    # 1. Target Selection Controls
+    # ------------------------------------------
+    st.subheader("1. Select Heat Priority Target Areas")
+    
+    col_preset, col_dist = st.columns([1, 1])
+    with col_preset:
+        preset_choice = st.radio(
+            "Quick Priority Tier Presets:",
+            options=["Very High Only", "High Only", "Very High + High", "All Priority Tiers", "Custom Selection"],
+            index=2,
+            horizontal=True
+        )
+        
+        if preset_choice == "Very High Only":
+            selected_tiers = ["Very High"]
+        elif preset_choice == "High Only":
+            selected_tiers = ["High"]
+        elif preset_choice == "Very High + High":
+            selected_tiers = ["Very High", "High"]
+        elif preset_choice == "All Priority Tiers":
+            selected_tiers = ["Very High", "High", "Medium", "Low"]
+        else:
+            selected_tiers = st.multiselect(
+                "Custom Priority Tier Selection:",
+                options=["Very High", "High", "Medium", "Low"],
+                default=["Very High", "High"]
+            )
+            
+    with col_dist:
+        all_districts = sorted(district_df['District'].unique().tolist()) if 'District' in district_df.columns else []
+        select_all_districts = st.checkbox("Select All Bangkok Districts", value=True)
+        if select_all_districts or not all_districts:
+            selected_districts = all_districts
+        else:
+            selected_districts = st.multiselect(
+                "Filter Specific District(s):",
+                options=all_districts,
+                default=all_districts[:5]
+            )
+
+    # Read-only Filtering of Existing Heat Priority Output Grid
+    selected_grid = grid_df[grid_df['Priority_Category'].isin(selected_tiers)].copy()
+    if all_districts and 'District' in selected_grid.columns and selected_districts:
+        selected_grid = selected_grid[selected_grid['District'].isin(selected_districts)]
+        
+    num_selected_cells = len(selected_grid)
+    
+    # ------------------------------------------
+    # 2. Interactive Calculator Assumptions
+    # ------------------------------------------
+    st.markdown("---")
+    st.subheader("2. Interactive Scenario Assumptions")
+    st.caption("Adjust the sliders below to explore different tree planting density and canopy scenarios.")
+    
+    col_param1, col_param2, col_param3, col_param4 = st.columns(4)
+    with col_param1:
+        plantable_pct = st.slider("Assumed Plantable Land (%)", min_value=1.0, max_value=50.0, value=15.0, step=1.0, help="Percentage of grid area available for tree planting (excluding existing buildings, roads, water bodies).")
+    with col_param2:
+        target_canopy_pct = st.slider("Target Canopy Coverage (%)", min_value=5.0, max_value=50.0, value=30.0, step=1.0, help="Desired percentage of plantable land covered by mature tree canopy.")
+    with col_param3:
+        tree_canopy_m2 = st.number_input("Mature Canopy Area per Tree (m²)", min_value=5.0, max_value=200.0, value=25.0, step=5.0, help="Assumed ground shadow area of a single mature tree crown.")
+    with col_param4:
+        tree_spacing_m = st.number_input("Tree Spacing Distance (m)", min_value=2.0, max_value=15.0, value=5.0, step=0.5, help="Assumed grid distance between adjacent planted trees.")
+        
+    # ------------------------------------------
+    # 3. Transparent Calculation Engine
+    # ------------------------------------------
+    # Step 1: Area Calculation (Each 250m x 250m cell = 62,500 m²)
+    CELL_AREA_M2 = 250.0 * 250.0
+    total_selected_area_m2 = num_selected_cells * CELL_AREA_M2
+    total_selected_area_km2 = total_selected_area_m2 / 1_000_000.0
+    
+    # Step 2: Plantable Area
+    plantable_area_m2 = total_selected_area_m2 * (plantable_pct / 100.0)
+    plantable_area_ha = plantable_area_m2 / 10_000.0
+    
+    # Step 3: Target Canopy Area
+    target_canopy_area_m2 = plantable_area_m2 * (target_canopy_pct / 100.0)
+    target_canopy_area_ha = target_canopy_area_m2 / 10_000.0
+    
+    # Step 4: Estimated Trees Needed
+    if tree_canopy_m2 > 0:
+        trees_needed = math.ceil(target_canopy_area_m2 / tree_canopy_m2)
+    else:
+        trees_needed = 0
+        
+    # Step 5: Planting Capacity
+    spacing_area = tree_spacing_m ** 2
+    if spacing_area > 0:
+        planting_capacity = math.floor(plantable_area_m2 / spacing_area)
+    else:
+        planting_capacity = 0
+        
+    # Step 6: Feasibility Check
+    is_feasible = trees_needed <= planting_capacity
+    
+    # ------------------------------------------
+    # 4. Display Results & Feasibility Alert
+    # ------------------------------------------
+    st.markdown("---")
+    st.subheader("3. Estimation Results & Capacity Feasibility")
+    
+    if num_selected_cells == 0:
+        st.warning("⚠️ No grid cells match your selected filters. Please expand your priority tier or district selections.")
+    else:
+        if is_feasible:
+            st.success(f"✅ **Target Scenario Feasible:** The estimated tree target ({trees_needed:,} trees) is within the maximum physical planting capacity ({planting_capacity:,} trees) under your selected spacing ({tree_spacing_m}m).")
+        else:
+            st.error(f"⚠️ **Target Scenario Infeasible Warning:** The estimated tree target ({trees_needed:,} trees) exceeds the physical planting capacity ({planting_capacity:,} trees) at {tree_spacing_m}m spacing. Increase tree spacing, reduce target canopy coverage, or adjust plantable land percentage.")
+            
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        with m_col1:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Selected Grid Cells</div>
+                <div class="metric-value">{num_selected_cells:,}</div>
+                <small>{total_selected_area_km2:.2f} km² Total Area</small>
+            </div>
+            """, unsafe_allow_html=True)
+        with m_col2:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Estimated Plantable Area</div>
+                <div class="metric-value">{plantable_area_ha:.1f} ha</div>
+                <small>{plantable_pct:.0f}% of Selected Area</small>
+            </div>
+            """, unsafe_allow_html=True)
+        with m_col3:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Target Trees Needed</div>
+                <div class="metric-value">{trees_needed:,}</div>
+                <small>{target_canopy_area_ha:.1f} ha Canopy Target</small>
+            </div>
+            """, unsafe_allow_html=True)
+        with m_col4:
+            st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-title">Max Planting Capacity</div>
+                <div class="metric-value">{planting_capacity:,}</div>
+                <small>At {tree_spacing_m}m Spacing</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Interactive Map Display of Selected Priority Cells
+        st.markdown("#### 🗺️ Selected Priority Target Map")
+        map_sample = selected_grid.sample(n=min(500, len(selected_grid)), random_state=42) if len(selected_grid) > 500 else selected_grid
+        
+        m_est = folium.Map(location=[13.7563, 100.5018], zoom_start=11, tiles="OpenStreetMap")
+        color_map = {'Very High': 'red', 'High': 'orange', 'Medium': 'yellow', 'Low': 'green'}
+        
+        for idx, row in map_sample.iterrows():
+            folium.CircleMarker(
+                location=[row['latitude'], row['longitude']],
+                radius=4,
+                color=color_map.get(row['Priority_Category'], 'blue'),
+                fill=True,
+                fill_opacity=0.7,
+                popup=f"Priority: {row['Priority_Category']}<br>LST: {row['LST']:.1f}°C"
+            ).add_to(m_est)
+            
+        st_folium(m_est, width=1200, height=450)
+
+    # ------------------------------------------
+    # 5. Tree Species Recommendation Guide
+    # ------------------------------------------
+    st.markdown("---")
+    st.subheader("4. Candidate Tree Species Guide & Suitability Matrix")
+    st.markdown("Filter recommended urban tree species based on target municipal planting environments:")
+    
+    env_filter = st.selectbox(
+        "Select Target Planting Environment:",
+        options=["All Environments", "Roadside", "Park", "Open Public Space", "Narrow Planting Space", "Residential Area"],
+        index=0
+    )
+    
+    # Filter species list based on environment selection
+    if env_filter == "All Environments":
+        filtered_species = SPECIES_DATA
+    else:
+        filtered_species = [s for s in SPECIES_DATA if env_filter in s['environments']]
+        
+    st.caption(f"Showing {len(filtered_species)} of {len(SPECIES_DATA)} candidate tree species suitable for **{env_filter}**.")
+    
+    # Display Species Cards
+    for s in filtered_species:
+        st.markdown(f"""
+        <div class="species-card">
+            <div class="species-title">{s['thai_name']}</div>
+            <div class="species-scientific">{s['scientific_name']}</div>
+            <div>{" ".join([f'<span class="badge">{e}</span>' for e in s['environments']])}</div>
+            <hr style="border-color: #3a506b; margin: 10px 0;">
+            <p><b>Description:</b> {s['description']}</p>
+            <p><b>Mature Canopy Size:</b> {s['canopy_size']}</p>
+            <p><b>Key Environmental Benefits:</b> {s['benefits']}</p>
+            <p style="color: #e63946;"><b>Important Limitations:</b> {s['limitations']}</p>
+            <p><small><b>Reference / Source:</b> {s['source']}</small></p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ------------------------------------------
+    # 6. Important Scientific & Planning Disclaimers
+    # ------------------------------------------
+    st.markdown("---")
+    st.subheader("⚠️ Important Scientific & Planning Limitations")
+    st.info("""
+    1. **Planning Estimates Only:** The tree numbers generated by this tool are educational planning scenarios based on user-defined inputs. They do not represent exact municipal tree planting directives.
+    2. **Assumed Available Land:** The model assumes a uniform plantable land percentage. It does not inspect real-time property boundaries, land ownership, pavement coverage, or underground utilities.
+    3. **Non-Guarantee of Survival:** Calculated targets do not account for sapling mortality rates, soil compaction, water availability, or maintenance schedules.
+    4. **Air vs. Surface Temperature:** Adding trees reduces Land Surface Temperature (LST) through direct shading, but microclimate ambient air cooling depends on local wind patterns, building geometries, and humidity.
+    5. **Site-Specific Arboricultural Requirements:** Species suitability guidance provides general ecological rules of thumb and must be verified by a certified arborist prior to field planting.
     """)
